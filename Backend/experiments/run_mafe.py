@@ -190,7 +190,7 @@ if __name__ == "__main__":
 # -----------------------------
 # API entry point
 # -----------------------------
-def run_pipeline(df: pd.DataFrame) -> dict:
+def run_pipeline(df: pd.DataFrame, jid: str = None) -> dict:
     df = df.copy()
     df.dropna(inplace=True)
     df["income"] = (df["income"].str.strip() == ">50K").astype(int)
@@ -296,6 +296,15 @@ def run_pipeline(df: pd.DataFrame) -> dict:
                 "name": col,
                 "agent": "transformation" if col in t_feat_cols else "interaction"
             })
+
+    # -----------------------------
+    # Save CSV if jid is provided
+    # -----------------------------
+    if jid:
+        X_full = pd.concat([X_train_safe, X_test_safe], axis=0).reset_index(drop=True)
+        y_full = pd.concat([y_train, y_test], axis=0).reset_index(drop=True)
+        final_df = pd.concat([X_full, y_full], axis=1)
+        final_df.to_csv(RESULTS_DIR / f"{jid}.csv", index=False)
 
     # -----------------------------
     # Return structured result

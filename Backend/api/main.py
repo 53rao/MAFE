@@ -1,6 +1,10 @@
 from fastapi import FastAPI, UploadFile, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import uuid, io, sys, os, pandas as pd
+from pathlib import Path
+
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -37,7 +41,7 @@ async def run(file: UploadFile, bg: BackgroundTasks):
 def _run(jid: str, df: pd.DataFrame):
     try:
         from experiments.run_mafe import run_pipeline
-        jobs[jid]["result"] = run_pipeline(df)
+        jobs[jid]["result"] = run_pipeline(df, jid=jid)
         jobs[jid]["status"] = "done"
     except Exception as e:
         jobs[jid]["status"] = "error"
@@ -76,3 +80,25 @@ def list_jobs():
         }
         for k, v in jobs.items()
     ]
+
+@app.delete("/jobs/{jid}")
+def delete_job(jid: str):
+    if jid in jobs:
+        del jobs[jid]
+        # Also clean up the CSV file if it exists
+        csv_path = RESULTS_DIR / f"{jid}.csv"
+        if csv_path.exists():
+            csv_path.unlink()
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Job not found")
+
+@app.get("/download/{jid}")
+def download_csv(jid: str):
+    file_path = RESULTS_DIR / f"{jid}.csv"
+    if file_path.exists():
+        return FileResponse(
+            path=file_path, 
+            filename=f"mafe_dataset_{jid[:8]}.csv", 
+            media_type='text/csv'
+        )
+    raise HTTPException(status_code=404, detail="CSV file not found or already deleted.")

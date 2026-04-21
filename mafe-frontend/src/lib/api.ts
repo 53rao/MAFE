@@ -25,3 +25,7 @@ export async function fetchJobs() {
   if (!res.ok) return [];
   return res.json();
 }
+
+export async function deleteJob(jobId: string) {
+  await fetch(`/api/mafe/jobs/${jobId}`, { method: "DELETE" });
+}

@@ -17,12 +17,16 @@ async function handler(
     duplex: "half",
   });
 
-  return new NextResponse(await res.text(), {
+  const headers = new Headers();
+  headers.set("Content-Type", res.headers.get("Content-Type") ?? "application/json");
+  if (res.headers.has("Content-Disposition")) {
+    headers.set("Content-Disposition", res.headers.get("Content-Disposition")!);
+  }
+
+  return new NextResponse(res.body, {
     status: res.status,
-    headers: {
-      "Content-Type": res.headers.get("Content-Type") ?? "application/json",
-    },
+    headers,
   });
 }
 
-export { handler as GET, handler as POST };
+export { handler as GET, handler as POST, handler as DELETE };

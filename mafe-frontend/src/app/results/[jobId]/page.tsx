@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -44,10 +44,27 @@ const gain = (a: number, b: number) => {
   return { label: (d >= 0 ? "+" : "") + d.toFixed(1) + "%", positive: d >= 0 };
 };
 
+const PIPELINE_STEPS = [
+  { title: "Transformation agent",  desc: "Applying non-linear transforms"      },
+  { title: "Interaction agent",     desc: "Generating feature pairs"             },
+  { title: "Leakage detection",     desc: "Checking for target leakage"          },
+  { title: "Coordinator agent",     desc: "Enforcing feature budget"             },
+  { title: "Pruner agent",          desc: "Removing redundant features"          },
+  { title: "Model evaluation",      desc: "Baseline vs augmented comparison"     },
+];
+
 export default function ResultsPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const setResult = useStore((s) => s.setResult);
   const cached    = useStore((s) => s.results[jobId]);
+
+  // Elapsed timer
+  const [elapsed, setElapsed] = useState(0);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Animated active step (cycles top-to-bottom while running)
+  const [activeStep, setActiveStep] = useState(0);
+  const stepRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: status } = useQuery<JobStatus>({
     queryKey: ["status", jobId],
@@ -63,13 +80,53 @@ export default function ResultsPage() {
     enabled:  status?.status === "done",
   });
 
+  // Delayed reveal of results so loading→results transition feels smooth
+  const [showResults, setShowResults] = useState(false);
+  const [allDone, setAllDone]         = useState(false);
+
   useEffect(() => {
-    if (fresh) setResult(jobId, fresh);
+    if (fresh) {
+      setResult(jobId, fresh);
+      // 1) Mark all steps as done immediately
+      setAllDone(true);
+      // 2) Then show results after a short pause so the completed state is visible
+      const t = setTimeout(() => setShowResults(true), 800);
+      return () => clearTimeout(t);
+    }
   }, [fresh]);
 
-  const data    = fresh || cached;
-  const running = !data && status?.status === "running";
-  const failed  = status?.status === "error";
+  // Start/stop timers based on running state
+  const running = !(fresh || cached) && status?.status === "running";
+
+  useEffect(() => {
+    if (running) {
+      setActiveStep(0);
+      elapsedRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+      // Reveal steps quickly one-by-one (~350 ms each → all 6 in ~2 s)
+      stepRef.current = setInterval(() =>
+        setActiveStep(s => {
+          const next = s + 1;
+          if (next >= PIPELINE_STEPS.length - 1) {
+            if (stepRef.current) clearInterval(stepRef.current);
+          }
+          return Math.min(next, PIPELINE_STEPS.length - 1);
+        }), 350
+      );
+    } else {
+      if (elapsedRef.current) clearInterval(elapsedRef.current);
+      if (stepRef.current)    clearInterval(stepRef.current);
+    }
+    return () => {
+      if (elapsedRef.current) clearInterval(elapsedRef.current);
+      if (stepRef.current)    clearInterval(stepRef.current);
+    };
+  }, [running]);
+
+  const data   = (showResults || !fresh) ? (fresh || cached) : null;
+  const failed = status?.status === "error";
+
+  const fmtElapsed = (s: number) =>
+    `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
   const metrics = data
     ? [
@@ -96,51 +153,108 @@ export default function ResultsPage() {
           </p>
         </div>
         {data && (
-          <button
-            onClick={() => {
-              const blob = new Blob(
-                [JSON.stringify(data, null, 2)],
-                { type: "application/json" }
-              );
-              const a = document.createElement("a");
-              a.href = URL.createObjectURL(blob);
-              a.download = `mafe-${jobId.slice(0, 8)}.json`;
-              a.click();
-            }}
-            className="text-sm border border-zinc-700 hover:border-zinc-500 px-4 py-2 rounded-lg text-zinc-400 hover:text-white transition-colors"
-          >
-            Export JSON
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                const blob = new Blob(
+                  [JSON.stringify(data, null, 2)],
+                  { type: "application/json" }
+                );
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `mafe-${jobId.slice(0, 8)}.json`;
+                a.click();
+              }}
+              className="text-sm border border-zinc-700 hover:border-zinc-500 px-4 py-2 rounded-lg text-zinc-400 hover:text-white transition-colors"
+            >
+              Export JSON
+            </button>
+            <a
+              href={`/api/mafe/download/${jobId}`}
+              download
+              className="text-sm bg-violet-600 hover:bg-violet-500 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+            >
+              Download Dataset (CSV)
+            </a>
+          </div>
         )}
       </div>
 
       {running && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <span className="w-2.5 h-2.5 rounded-full bg-violet-500 animate-pulse block" />
-            <span className="font-medium text-zinc-200">Pipeline running…</span>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-8 overflow-hidden">
+
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <span className="font-semibold text-zinc-100 text-base">Pipeline running…</span>
+            <span className="text-xs font-mono text-zinc-600 tabular-nums">
+              {fmtElapsed(elapsed)}
+            </span>
           </div>
-          <div className="space-y-4">
-            {[
-              ["Transformation agent",  "Applying non-linear transforms"],
-              ["Interaction agent",      "Generating feature pairs"],
-              ["Leakage detection",      "Checking for target leakage"],
-              ["Coordinator agent",      "Enforcing feature budget"],
-              ["Pruner agent",           "Removing redundant features"],
-              ["Model evaluation",       "Baseline vs augmented comparison"],
-            ].map(([title, desc], i) => (
-              <div key={i} className="flex items-center gap-4">
-                <span className="w-6 h-6 shrink-0 rounded-full bg-zinc-800 border border-zinc-700 text-xs flex items-center justify-center text-zinc-500">
-                  {i + 1}
-                </span>
-                <div>
-                  <p className="text-sm font-medium text-zinc-300">{title}</p>
-                  <p className="text-xs text-zinc-500">{desc}</p>
-                </div>
-              </div>
-            ))}
+
+          {/* Step list — reveals top-to-bottom */}
+          <div className="relative pl-9">
+            {/* Static track */}
+            <div className="absolute left-[11px] top-2 bottom-2 w-px bg-zinc-800" />
+            {/* Growing fill — reaches 100% only when backend confirms done */}
+            <div
+              className="absolute left-[11px] top-2 w-px bg-violet-900"
+              style={{
+                height: allDone
+                  ? "100%"
+                  : `${(activeStep / Math.max(PIPELINE_STEPS.length - 1, 1)) * 90}%`,
+                transition: "height 0.5s ease",
+              }}
+            />
+
+            <div className="space-y-6">
+              {PIPELINE_STEPS.map((step, i) => {
+                const revealed = i <= activeStep;
+                const isDone   = allDone ? true : i < activeStep;
+                const isActive = !allDone && i === activeStep;
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center gap-4"
+                    style={{
+                      opacity:    revealed ? 1 : 0,
+                      transform:  revealed ? "translateY(0)" : "translateY(10px)",
+                      transition: "opacity 0.4s ease, transform 0.4s ease",
+                    }}
+                  >
+                    {/* Dot */}
+                    <div
+                      className="flex-shrink-0 -ml-9 w-[22px] h-[22px] rounded-full"
+                      style={{
+                        background: isDone
+                          ? "#3b1f6e"
+                          : isActive
+                          ? "#5b21b6"
+                          : "#1c1c22",
+                        border: `2px solid ${isDone ? "#5b21b6" : isActive ? "#7c3aed" : "#3f3f46"}`,
+                        transition: "background 0.4s ease, border-color 0.4s ease",
+                      }}
+                    />
+
+                    {/* Text */}
+                    <div>
+                      <p
+                        className="text-sm font-medium"
+                        style={{
+                          color: revealed ? "#d4d4d8" : "#52525b",
+                          transition: "color 0.4s ease",
+                        }}
+                      >
+                        {step.title}
+                      </p>
+                      {isActive && (
+                        <p className="text-xs text-zinc-600 mt-0.5">{step.desc}</p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <p className="text-xs text-zinc-600 mt-6">Page auto-updates every 2 seconds.</p>
         </div>
       )}
 
